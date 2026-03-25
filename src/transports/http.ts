@@ -160,6 +160,13 @@ export class HttpTransportHandler {
         `accept=${req.headers.accept ?? '-'} content-length=${req.headers['content-length'] ?? '-'} ` +
         `mcp-session-id=${(req.headers['mcp-session-id'] as string | undefined) ?? '-'}`
       );
+      // Log final response status for debugging gateway/server issues.
+      // This helps distinguish "service returned 500" from "gateway returned 500".
+      if (typeof (res as any).on === 'function') {
+        (res as any).on('finish', () => {
+          this.debugLog(`request ${requestId} finished status=${res.statusCode} headersSent=${res.headersSent}`);
+        });
+      }
 
       // Validate Origin header to prevent DNS rebinding attacks (MCP spec requirement)
       const origin = req.headers.origin;
