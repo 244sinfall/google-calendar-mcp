@@ -37,9 +37,13 @@ This guide provides detailed instructions for setting up Google OAuth 2.0 authen
      - **Important**: Wait 2-3 minutes for test users to propagate
 
 4. Create the OAuth client:
-   - Application type: **Desktop app** (Important!)
-   - Name: "Calendar MCP Client"
-   - Click "Create"
+  - Application type: **Desktop app** or **Web application**
+  - Name: "Calendar MCP Client"
+  - Click "Create"
+
+  If you plan to authenticate users via a publicly reachable callback URL (cloud/runtime deployment),
+  use **Web application** credentials and add your callback URL (e.g. `https://calendar.example.com/oauth2callback`)
+  to **Authorized redirect URIs**.
 
 5. Download the credentials:
    - Click the download button (⬇️) next to your new client

@@ -6,9 +6,12 @@ async function loadCredentialsFromFile(): Promise<OAuthCredentials> {
   const keysContent = await fs.readFile(getKeysFilePath(), "utf-8");
   const keys = JSON.parse(keysContent);
 
-  if (keys.installed) {
-    // Standard OAuth credentials file format
-    const { client_id, client_secret, redirect_uris } = keys.installed;
+  // Google OAuth credentials commonly come in one of two wrapper formats:
+  // - Desktop app: { installed: { client_id, client_secret, redirect_uris, ... } }
+  // - Web app:     { web:       { client_id, client_secret, redirect_uris, ... } }
+  const wrapped = keys.installed ?? keys.web;
+  if (wrapped) {
+    const { client_id, client_secret, redirect_uris } = wrapped;
     return { client_id, client_secret, redirect_uris };
   } else if (keys.client_id && keys.client_secret) {
     // Direct format
@@ -18,7 +21,7 @@ async function loadCredentialsFromFile(): Promise<OAuthCredentials> {
       redirect_uris: keys.redirect_uris || ['http://localhost:3000/oauth2callback']
     };
   } else {
-    throw new Error('Invalid credentials file format. Expected either "installed" object or direct client_id/client_secret fields.');
+    throw new Error('Invalid credentials file format. Expected either "installed" or "web" object, or direct client_id/client_secret fields.');
   }
 }
 
