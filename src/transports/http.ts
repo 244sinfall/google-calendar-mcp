@@ -243,6 +243,7 @@ export class HttpTransportHandler {
         `request ${requestId} ${req.method} ${req.url} ` +
         `origin=${req.headers.origin ?? '-'} host=${req.headers.host ?? '-'} ` +
         `accept=${req.headers.accept ?? '-'} content-length=${req.headers['content-length'] ?? '-'} ` +
+        `content-type=${(req.headers['content-type'] as string | undefined) ?? '-'} ` +
         `mcp-session-id=${(req.headers['mcp-session-id'] as string | undefined) ?? '-'}`
       );
       // Log final response status for debugging gateway/server issues.
@@ -253,11 +254,14 @@ export class HttpTransportHandler {
           if (debugCapture && res.statusCode >= 400) {
             const reqBody = debugCapture.getRequestBody();
             const resBody = debugCapture.getResponseBody();
-            if (reqBody) {
-              this.debugLog(`request ${requestId} /mcp request body (truncated): ${reqBody}`);
-            }
-            if (resBody) {
-              this.debugLog(`request ${requestId} /mcp response body (truncated): ${resBody}`);
+            this.debugLog(`request ${requestId} /mcp request body (truncated): ${reqBody || '<empty>'}`);
+            this.debugLog(`request ${requestId} /mcp response body (truncated): ${resBody || '<empty>'}`);
+            if (typeof (res as any).getHeaders === 'function') {
+              try {
+                this.debugLog(`request ${requestId} response headers: ${JSON.stringify((res as any).getHeaders())}`);
+              } catch {
+                // ignore
+              }
             }
           }
         });
