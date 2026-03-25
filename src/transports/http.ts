@@ -39,12 +39,16 @@ export function isLocalhostOrigin(origin: string): boolean {
 export interface HttpTransportConfig {
   port?: number;
   host?: string;
+  debug?: boolean;
+  allowedOriginsForAccounts?: string[];
 }
 
 export class HttpTransportHandler {
   private server: McpServer;
   private config: HttpTransportConfig;
   private tokenManager: TokenManager;
+  private debug: boolean;
+  private allowedOriginsForAccounts: Set<string>;
 
   constructor(
     server: McpServer,
@@ -54,6 +58,26 @@ export class HttpTransportHandler {
     this.server = server;
     this.config = config;
     this.tokenManager = tokenManager;
+    this.debug = config.debug === true;
+    this.allowedOriginsForAccounts = new Set(
+      (config.allowedOriginsForAccounts ?? [])
+        .map(o => o.trim())
+        .filter(o => o.length > 0)
+    );
+  }
+
+  private debugLog(message: string): void {
+    if (!this.debug) return;
+    process.stderr.write(`[http][debug] ${message}\n`);
+  }
+
+  private isAllowedOriginForAccounts(origin: string): boolean {
+    // Always allow localhost origins for backwards compatibility / local dev.
+    if (isLocalhostOrigin(origin)) return true;
+    // If no allowlist is configured, keep the default strict behavior.
+    if (this.allowedOriginsForAccounts.size === 0) return false;
+    // Exact origin match (scheme + host + optional port).
+    return this.allowedOriginsForAccounts.has(origin);
   }
 
   /**
@@ -119,24 +143,42 @@ export class HttpTransportHandler {
 
     // Create HTTP server to handle the StreamableHTTP transport
     const httpServer = http.createServer(async (req, res) => {
+      const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      this.debugLog(
+        `request ${requestId} ${req.method} ${req.url} ` +
+        `origin=${req.headers.origin ?? '-'} host=${req.headers.host ?? '-'} ` +
+        `accept=${req.headers.accept ?? '-'} content-length=${req.headers['content-length'] ?? '-'} ` +
+        `mcp-session-id=${(req.headers['mcp-session-id'] as string | undefined) ?? '-'}`
+      );
+
       // Validate Origin header to prevent DNS rebinding attacks (MCP spec requirement)
       const origin = req.headers.origin;
 
       // For requests with Origin header, validate it using proper URL parsing
       // This prevents bypass via subdomains like localhost.attacker.com
-      if (origin && !isLocalhostOrigin(origin)) {
-        res.writeHead(403, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          error: 'Forbidden: Invalid origin',
-          message: 'Origin header validation failed'
-        }));
-        return;
+      if (origin) {
+        const url = req.url || '/';
+        const isAccountsApi = url === '/api/accounts' || url.startsWith('/api/accounts/');
+        const originAllowed = isAccountsApi
+          ? this.isAllowedOriginForAccounts(origin)
+          : isLocalhostOrigin(origin);
+
+        if (!originAllowed) {
+          this.debugLog(`request ${requestId} rejected: invalid origin`);
+          res.writeHead(403, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            error: 'Forbidden: Invalid origin',
+            message: 'Origin header validation failed'
+          }));
+          return;
+        }
       }
 
       // Basic request size limiting (prevent DoS)
       const contentLength = parseInt(req.headers['content-length'] || '0', 10);
       const maxRequestSize = 10 * 1024 * 1024; // 10MB limit
       if (contentLength > maxRequestSize) {
+        this.debugLog(`request ${requestId} rejected: payload too large (${contentLength})`);
         res.writeHead(413, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           error: 'Payload Too Large',
@@ -164,6 +206,7 @@ export class HttpTransportHandler {
       if (req.method === 'POST' || req.method === 'GET') {
         const acceptHeader = req.headers.accept;
         if (acceptHeader && !acceptHeader.includes('application/json') && !acceptHeader.includes('text/event-stream') && !acceptHeader.includes('*/*')) {
+          this.debugLog(`request ${requestId} rejected: unacceptable accept header (${acceptHeader})`);
           res.writeHead(406, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             error: 'Not Acceptable',
@@ -421,9 +464,15 @@ export class HttpTransportHandler {
       }
 
       try {
+        this.debugLog(`request ${requestId} transport.handleRequest start`);
         await transport.handleRequest(req, res);
+        this.debugLog(`request ${requestId} transport.handleRequest done`);
       } catch (error) {
-        process.stderr.write(`Error handling request: ${error instanceof Error ? error.message : error}\n`);
+        const message = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`Error handling request: ${message}\n`);
+        if (this.debug && error instanceof Error && error.stack) {
+          process.stderr.write(`${error.stack}\n`);
+        }
         if (!res.headersSent) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({

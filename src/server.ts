@@ -212,7 +212,9 @@ export class GoogleCalendarMcpServer {
       case 'http':
         const httpConfig: HttpTransportConfig = {
           port: this.config.transport.port,
-          host: this.config.transport.host
+          host: this.config.transport.host,
+          debug: this.config.debug === true,
+          allowedOriginsForAccounts: this.config.allowedOriginsForAccounts
         };
         const httpHandler = new HttpTransportHandler(
           this.server,

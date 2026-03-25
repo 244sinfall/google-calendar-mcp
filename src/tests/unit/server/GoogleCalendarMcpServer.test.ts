@@ -157,7 +157,7 @@ describe('GoogleCalendarMcpServer', () => {
 
     expect(state.httpConnect).toHaveBeenCalledTimes(1);
     const args = (state.httpConnect as any).mockHttpArgs;
-    expect(args[1]).toEqual({ host: '0.0.0.0', port: 3456 });
+    expect(args[1]).toEqual({ host: '0.0.0.0', port: 3456, debug: false });
     expect(args[2]).toBe(state.tokenManagerInstance);
   });
 

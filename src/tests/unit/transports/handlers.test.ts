@@ -201,6 +201,54 @@ describe('Transport Handlers', () => {
     expect(JSON.parse(res.body).accounts).toEqual([{ id: 'work', status: 'active' }]);
   });
 
+  it('allows /api/accounts from configured non-localhost origins', async () => {
+    const server = { connect: vi.fn(async () => undefined) } as any;
+    const tokenManager = {
+      listAccounts: vi.fn(async () => [{ id: 'work', status: 'active' }]),
+      getAccountMode: vi.fn(),
+      setAccountMode: vi.fn(),
+      clearTokens: vi.fn(),
+      saveTokens: vi.fn()
+    } as any;
+    const handler = new HttpTransportHandler(server, {
+      allowedOriginsForAccounts: ['https://gateway.example.com']
+    }, tokenManager);
+    await handler.connect();
+
+    const req = createMockRequest({
+      method: 'GET',
+      url: '/api/accounts',
+      headers: { origin: 'https://gateway.example.com', accept: 'application/json' }
+    });
+    const res = createMockResponse();
+
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).accounts).toEqual([{ id: 'work', status: 'active' }]);
+  });
+
+  it('still rejects /mcp from configured non-localhost origins', async () => {
+    const server = { connect: vi.fn(async () => undefined) } as any;
+    const tokenManager = { listAccounts: vi.fn(), getAccountMode: vi.fn(), setAccountMode: vi.fn(), clearTokens: vi.fn(), saveTokens: vi.fn() } as any;
+    const handler = new HttpTransportHandler(server, {
+      allowedOriginsForAccounts: ['https://gateway.example.com']
+    }, tokenManager);
+    await handler.connect();
+
+    const req = createMockRequest({
+      method: 'POST',
+      url: '/mcp',
+      headers: { origin: 'https://gateway.example.com', accept: 'application/json' }
+    });
+    const res = createMockResponse();
+
+    await invokeHandler(req, res);
+
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toContain('Invalid origin');
+  });
+
   it('creates OAuth URL for POST /api/accounts', async () => {
     const server = { connect: vi.fn(async () => undefined) } as any;
     const tokenManager = { listAccounts: vi.fn(), getAccountMode: vi.fn(), setAccountMode: vi.fn(), clearTokens: vi.fn(), saveTokens: vi.fn() } as any;
