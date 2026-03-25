@@ -41,6 +41,7 @@ export interface HttpTransportConfig {
   host?: string;
   debug?: boolean;
   allowedOriginsForAccounts?: string[];
+  publicBaseUrl?: string;
 }
 
 export class HttpTransportHandler {
@@ -49,6 +50,7 @@ export class HttpTransportHandler {
   private tokenManager: TokenManager;
   private debug: boolean;
   private allowedOriginsForAccounts: Set<string>;
+  private publicBaseUrl: string | null;
 
   constructor(
     server: McpServer,
@@ -64,6 +66,7 @@ export class HttpTransportHandler {
         .map(o => o.trim())
         .filter(o => o.length > 0)
     );
+    this.publicBaseUrl = config.publicBaseUrl ? config.publicBaseUrl.trim().replace(/\/+$/, '') : null;
   }
 
   private debugLog(message: string): void {
@@ -80,6 +83,13 @@ export class HttpTransportHandler {
     return this.allowedOriginsForAccounts.has(origin);
   }
 
+  private getOAuthRedirectUri(accountId: string, host: string, port: number): string {
+    if (this.publicBaseUrl) {
+      return `${this.publicBaseUrl}/oauth2callback?account=${encodeURIComponent(accountId)}`;
+    }
+    return `http://${host}:${port}/oauth2callback?account=${encodeURIComponent(accountId)}`;
+  }
+
   /**
    * Creates an OAuth2Client configured for the given account.
    * Consolidates credential loading and redirect URI construction.
@@ -91,7 +101,7 @@ export class HttpTransportHandler {
     return new OAuth2Client(
       client_id,
       client_secret,
-      `http://${host}:${port}/oauth2callback?account=${accountId}`
+      this.getOAuthRedirectUri(accountId, host, port)
     );
   }
 

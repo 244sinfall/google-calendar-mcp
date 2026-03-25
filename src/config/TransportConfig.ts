@@ -9,6 +9,7 @@ export interface ServerConfig {
   debug?: boolean;
   enabledTools?: string[];
   allowedOriginsForAccounts?: string[];
+  publicBaseUrl?: string;
 }
 
 function parseEnabledTools(value: string | undefined, source: string): string[] | undefined {
@@ -32,6 +33,9 @@ export function parseArgs(args: string[]): ServerConfig {
     .map(s => s.trim())
     .filter(Boolean);
 
+  const publicBaseUrlRaw = process.env.GOOGLE_CALENDAR_MCP_PUBLIC_BASE_URL?.trim();
+  const publicBaseUrl = publicBaseUrlRaw && publicBaseUrlRaw.length > 0 ? publicBaseUrlRaw : undefined;
+
   const config: ServerConfig = {
     transport: {
       type: (process.env.TRANSPORT as 'stdio' | 'http') || 'stdio',
@@ -40,7 +44,8 @@ export function parseArgs(args: string[]): ServerConfig {
     },
     debug: process.env.DEBUG === 'true' || false,
     enabledTools: parseEnabledTools(process.env.ENABLED_TOOLS, 'ENABLED_TOOLS'),
-    allowedOriginsForAccounts: allowedOriginsForAccounts.length > 0 ? allowedOriginsForAccounts : undefined
+    allowedOriginsForAccounts: allowedOriginsForAccounts.length > 0 ? allowedOriginsForAccounts : undefined,
+    publicBaseUrl
   };
 
   for (let i = 0; i < args.length; i++) {

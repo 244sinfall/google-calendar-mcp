@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   loadWebFile: vi.fn(async (name: string) => `file:${name}`),
   validateAccountId: vi.fn(),
   loadCredentials: vi.fn(async () => ({ client_id: 'client-id', client_secret: 'client-secret' })),
+  lastOAuthRedirectUri: undefined as string | undefined,
 }));
 
 vi.mock('@modelcontextprotocol/sdk/server/streamableHttp.js', () => ({
@@ -61,6 +62,11 @@ vi.mock('../../../auth/client.js', () => ({
 
 vi.mock('google-auth-library', () => ({
   OAuth2Client: class MockOAuth2Client {
+    redirectUri: string | undefined;
+    constructor(_clientId: string, _clientSecret: string, redirectUri?: string) {
+      this.redirectUri = redirectUri;
+      state.lastOAuthRedirectUri = redirectUri;
+    }
     generateAuthUrl = vi.fn(() => 'https://auth.example.com');
     getToken = vi.fn(async () => ({ tokens: { access_token: 'token', refresh_token: 'refresh' } }));
     setCredentials = vi.fn();
@@ -272,6 +278,33 @@ describe('Transport Handlers', () => {
     const payload = JSON.parse(res.body);
     expect(payload.accountId).toBe('work');
     expect(payload.authUrl).toBe('https://auth.example.com');
+  });
+
+  it('uses public base URL for OAuth redirect URI when configured', async () => {
+    const server = { connect: vi.fn(async () => undefined) } as any;
+    const tokenManager = { listAccounts: vi.fn(), getAccountMode: vi.fn(), setAccountMode: vi.fn(), clearTokens: vi.fn(), saveTokens: vi.fn() } as any;
+    const handler = new HttpTransportHandler(server, {
+      port: 4000,
+      host: '0.0.0.0',
+      publicBaseUrl: 'https://calendar.example.com'
+    }, tokenManager);
+    await handler.connect();
+
+    const req = createMockRequest({
+      method: 'POST',
+      url: '/api/accounts',
+      headers: { origin: 'http://localhost', accept: 'application/json', 'content-length': '25' }
+    });
+    const res = createMockResponse();
+
+    const pending = invokeHandler(req, res);
+    req.emit('data', Buffer.from(JSON.stringify({ accountId: 'work' })));
+    req.emit('end');
+    await pending;
+
+    expect(res.statusCode).toBe(200);
+    expect(state.lastOAuthRedirectUri).toBe('https://calendar.example.com/oauth2callback?account=work');
+
   });
 
   it('returns 500 when MCP transport request handling throws', async () => {
