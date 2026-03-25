@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import http from "http";
+import crypto from "crypto";
 import { TokenManager } from "../auth/tokenManager.js";
 import { CalendarRegistry } from "../services/CalendarRegistry.js";
 import { renderAuthSuccess, renderAuthError, loadWebFile } from "../web/templates.js";
@@ -220,9 +221,12 @@ export class HttpTransportHandler {
     const port = this.config.port || 3000;
     const host = this.config.host || '127.0.0.1';
 
-    // Configure transport for stateless mode to allow multiple initialization cycles
+    // IMPORTANT:
+    // Stateless Streamable HTTP transports cannot be reused across requests (SDK will throw).
+    // This server is long-lived and must handle many requests, so we run in STATEFUL mode.
+    // The server will return `mcp-session-id` on initialize; clients must send it on subsequent requests.
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined // Stateless mode - allows multiple initializations
+      sessionIdGenerator: () => crypto.randomUUID()
     });
 
     await this.server.connect(transport);
