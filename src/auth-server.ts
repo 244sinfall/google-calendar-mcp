@@ -3,9 +3,16 @@ import { AuthServer } from './auth/server.js';
 
 // Check for command line arguments
 const args = process.argv.slice(2);
-if (args.length > 0) {
-  // Assume the first argument is the account mode
-  process.env.GOOGLE_ACCOUNT_MODE = args[0];
+for (const arg of args) {
+  // Allow passing cloud-friendly callback URL, e.g.:
+  //   npm run auth -- work https://calendar.example.com/oauth2callback
+  if (/^[a-z0-9_-]{1,64}$/.test(arg)) {
+    process.env.GOOGLE_ACCOUNT_MODE = arg;
+    continue;
+  }
+  if (arg.startsWith('http://') || arg.startsWith('https://')) {
+    process.env.GOOGLE_CALENDAR_MCP_AUTH_CALLBACK_URL = arg;
+  }
 }
 
 async function runAuthServer() {

@@ -32,11 +32,26 @@ export class AuthServer {
   private mcpToolTimeout: ReturnType<typeof setTimeout> | null = null; // Timeout for MCP tool auth flow
   private autoShutdownOnSuccess = false; // Whether to auto-shutdown after successful auth
   private pendingAuthFlow: PendingAuthFlow | null = null; // PKCE + state for current OAuth flow
+  
+  private getExternalOAuthCallbackUrl(): string | null {
+    const url = process.env.GOOGLE_CALENDAR_MCP_AUTH_CALLBACK_URL;
+    return url ? url.trim() : null;
+  }
+
+  private getAuthServerPortOverride(): number | null {
+    const raw = process.env.GOOGLE_CALENDAR_MCP_AUTH_SERVER_PORT;
+    if (!raw) return null;
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    return parsed;
+  }
 
   constructor(oauth2Client: OAuth2Client) {
     this.baseOAuth2Client = oauth2Client;
     this.tokenManager = new TokenManager(oauth2Client);
-    this.portRange = { start: 3500, end: 3505 };
+    const fixedPort = this.getAuthServerPortOverride();
+    // In cloud runtimes it's often easier to expose a single stable port.
+    this.portRange = fixedPort ? { start: fixedPort, end: fixedPort } : { start: 3500, end: 3505 };
   }
 
   /**
@@ -44,10 +59,11 @@ export class AuthServer {
    */
   private async createFlowOAuth2Client(port: number): Promise<OAuth2Client> {
     const { client_id, client_secret } = await loadCredentials();
+    const redirectUri = this.getExternalOAuthCallbackUrl() ?? `http://localhost:${port}/oauth2callback`;
     return new OAuth2Client(
       client_id,
       client_secret,
-      `http://localhost:${port}/oauth2callback`
+      redirectUri
     );
   }
 
@@ -415,7 +431,7 @@ export class AuthServer {
     return {
       success: true,
       authUrl,
-      callbackUrl: `http://localhost:${port}/oauth2callback`
+      callbackUrl: this.getExternalOAuthCallbackUrl() ?? `http://localhost:${port}/oauth2callback`
     };
   }
 } 

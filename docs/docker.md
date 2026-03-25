@@ -28,6 +28,12 @@ docker compose exec calendar-mcp npm run auth
 # Note: This step only needs to be done once unless the app is in testing mode
 # in which case the tokens expire after 7 days 
 
+# Cloud-friendly auth note:
+# If you're deploying to a cloud environment where the container cannot rely on `localhost`,
+# set `GOOGLE_CALENDAR_MCP_AUTH_CALLBACK_URL` (and optionally
+# `GOOGLE_CALENDAR_MCP_AUTH_SERVER_PORT`) and use the `manage-accounts` tool instead of
+# running `npm run auth` inside the container.
+
 # 5. Manage accounts from your browser
 # Visit http://localhost:3000/accounts to add, re-authenticate, or remove accounts
 

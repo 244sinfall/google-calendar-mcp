@@ -155,6 +155,21 @@ manage-accounts with action: "add", account_id: "work"
 ```
 This returns an authentication URL. Click it, sign in with Google, and you're done. The `account_id` is a nickname you choose to identify this account.
 
+### Cloud-Friendly OAuth (Public Callback URL)
+If you're running the MCP server in a cloud/container environment, Google must be able to reach the OAuth redirect/callback URL from outside (it cannot use `localhost`).
+
+Before adding accounts, set these environment variables on the server:
+- `GOOGLE_CALENDAR_MCP_AUTH_CALLBACK_URL`: the externally reachable redirect URL, including scheme + host + path (example: `https://calendar.example.com/oauth2callback` or `http://calendar.example.com:3500/oauth2callback`)
+- `GOOGLE_CALENDAR_MCP_AUTH_SERVER_PORT` (optional): set a single fixed internal port (so you can map/open just one port in your firewall/reverse proxy)
+
+Then update your Google OAuth client “Authorized redirect URIs” to include the exact value of `GOOGLE_CALENDAR_MCP_AUTH_CALLBACK_URL`.
+
+When you run:
+```text
+manage-accounts with action: "add", account_id: "work"
+```
+the tool will return an `auth_url` whose redirect URI matches your public callback URL, allowing authentication to complete from a cloud runtime.
+
 **Remove an account:**
 ```
 manage-accounts with action: "remove", account_id: "work"

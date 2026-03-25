@@ -58,10 +58,14 @@ describe('AuthServer', () => {
   let authServer: any;
   let mockOAuth2Client: OAuth2Client;
   let mockHttpServer: any;
+  let originalEnv: NodeJS.ProcessEnv;
 
   beforeEach(async () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
+    originalEnv = { ...process.env };
+    delete process.env.GOOGLE_CALENDAR_MCP_AUTH_CALLBACK_URL;
+    delete process.env.GOOGLE_CALENDAR_MCP_AUTH_SERVER_PORT;
 
     // Create mock OAuth2Client
     mockOAuth2Client = new OAuth2Client('client-id', 'client-secret', 'redirect-uri');
@@ -88,6 +92,7 @@ describe('AuthServer', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.resetModules();
+    process.env = originalEnv;
   });
 
   describe('startForMcpTool', () => {
@@ -99,6 +104,18 @@ describe('AuthServer', () => {
       expect(result.authUrl).toContain('accounts.google.com');
       expect(result.callbackUrl).toContain('oauth2callback');
       expect(result.callbackUrl).toContain('3500');
+    });
+
+    it('should use external callback URL when GOOGLE_CALENDAR_MCP_AUTH_CALLBACK_URL is set', async () => {
+      process.env.GOOGLE_CALENDAR_MCP_AUTH_CALLBACK_URL = 'https://calendar.example.com/oauth2callback';
+
+      const result = await authServer.startForMcpTool('work');
+
+      expect(result.success).toBe(true);
+      expect(result.callbackUrl).toBe('https://calendar.example.com/oauth2callback');
+
+      const url = new URL(result.authUrl!);
+      expect(url.searchParams.get('redirect_uri')).toBe('https://calendar.example.com/oauth2callback');
     });
 
     it('should stop existing server before starting new one', async () => {
