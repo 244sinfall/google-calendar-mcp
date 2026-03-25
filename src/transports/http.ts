@@ -74,6 +74,82 @@ export class HttpTransportHandler {
     process.stderr.write(`[http][debug] ${message}\n`);
   }
 
+  private installDebugCapture(
+    requestId: string,
+    req: http.IncomingMessage,
+    res: http.ServerResponse
+  ): { getRequestBody: () => string; getResponseBody: () => string } {
+    const maxBytes = 16 * 1024;
+
+    let reqBytes = 0;
+    const reqChunks: Buffer[] = [];
+    const onReqData = (chunk: Buffer) => {
+      if (reqBytes >= maxBytes) return;
+      const slice = chunk.length + reqBytes > maxBytes ? chunk.subarray(0, maxBytes - reqBytes) : chunk;
+      reqChunks.push(slice);
+      reqBytes += slice.length;
+    };
+    // Safe: multiple 'data' listeners can observe the same stream.
+    if (typeof (req as any).on === 'function') {
+      (req as any).on('data', onReqData);
+    }
+
+    let resBytes = 0;
+    const resChunks: Buffer[] = [];
+    const captureResChunk = (chunk: unknown) => {
+      if (resBytes >= maxBytes) return;
+      if (typeof chunk === 'string') {
+        const b = Buffer.from(chunk);
+        const slice = b.length + resBytes > maxBytes ? b.subarray(0, maxBytes - resBytes) : b;
+        resChunks.push(slice);
+        resBytes += slice.length;
+        return;
+      }
+      if (Buffer.isBuffer(chunk)) {
+        const slice = chunk.length + resBytes > maxBytes ? chunk.subarray(0, maxBytes - resBytes) : chunk;
+        resChunks.push(slice);
+        resBytes += slice.length;
+      }
+    };
+
+    // Monkeypatch response write/end for capture (defensive: tests may provide mocks).
+    const originalWrite = (res as any).write?.bind(res);
+    const originalEnd = (res as any).end?.bind(res);
+
+    if (typeof originalWrite === 'function') {
+      (res as any).write = (chunk: any, ...args: any[]) => {
+        try { captureResChunk(chunk); } catch { /* ignore */ }
+        return originalWrite(chunk, ...args);
+      };
+    }
+
+    if (typeof originalEnd === 'function') {
+      (res as any).end = (chunk?: any, ...args: any[]) => {
+        try { captureResChunk(chunk); } catch { /* ignore */ }
+        return originalEnd(chunk, ...args);
+      };
+    }
+
+    const getRequestBody = () => {
+      if (reqChunks.length === 0) return '';
+      return Buffer.concat(reqChunks).toString('utf-8');
+    };
+    const getResponseBody = () => {
+      if (resChunks.length === 0) return '';
+      return Buffer.concat(resChunks).toString('utf-8');
+    };
+
+    // Cleanup listeners on finish/close (best-effort)
+    if (typeof (res as any).on === 'function') {
+      (res as any).on('close', () => {
+        try { (req as any).off?.('data', onReqData); } catch { /* ignore */ }
+        this.debugLog(`request ${requestId} debug capture closed`);
+      });
+    }
+
+    return { getRequestBody, getResponseBody };
+  }
+
   private isAllowedOriginForAccounts(origin: string): boolean {
     // Always allow localhost origins for backwards compatibility / local dev.
     if (isLocalhostOrigin(origin)) return true;
@@ -154,6 +230,11 @@ export class HttpTransportHandler {
     // Create HTTP server to handle the StreamableHTTP transport
     const httpServer = http.createServer(async (req, res) => {
       const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+      const debugCapture =
+        this.debug && (req.url === '/mcp' || (req.url || '').startsWith('/mcp?'))
+          ? this.installDebugCapture(requestId, req, res)
+          : null;
+
       this.debugLog(
         `request ${requestId} ${req.method} ${req.url} ` +
         `origin=${req.headers.origin ?? '-'} host=${req.headers.host ?? '-'} ` +
@@ -165,6 +246,16 @@ export class HttpTransportHandler {
       if (typeof (res as any).on === 'function') {
         (res as any).on('finish', () => {
           this.debugLog(`request ${requestId} finished status=${res.statusCode} headersSent=${res.headersSent}`);
+          if (debugCapture && res.statusCode >= 400) {
+            const reqBody = debugCapture.getRequestBody();
+            const resBody = debugCapture.getResponseBody();
+            if (reqBody) {
+              this.debugLog(`request ${requestId} /mcp request body (truncated): ${reqBody}`);
+            }
+            if (resBody) {
+              this.debugLog(`request ${requestId} /mcp response body (truncated): ${resBody}`);
+            }
+          }
         });
       }
 
