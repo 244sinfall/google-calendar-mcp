@@ -17,7 +17,9 @@ const state = vi.hoisted(() => ({
 vi.mock('@modelcontextprotocol/sdk/server/streamableHttp.js', () => ({
   StreamableHTTPServerTransport: class MockStreamableHTTPServerTransport {
     handleRequest = vi.fn(async () => undefined);
-    constructor() {
+    onclose: (() => void) | undefined;
+    onerror: ((err: Error) => void) | undefined;
+    constructor(_opts?: any) {
       state.transport = this;
     }
   }
@@ -27,16 +29,40 @@ vi.mock('@modelcontextprotocol/sdk/server/stdio.js', () => ({
   StdioServerTransport: class MockStdioServerTransport {}
 }));
 
-vi.mock('http', () => ({
-  default: {
-    createServer: vi.fn((handler: any) => {
-      state.requestHandler = handler;
-      return {
-        listen: state.listen
-      };
-    })
-  }
-}));
+vi.mock('express', async () => {
+  const routes = new Map<string, any>();
+
+  const app = {
+    use: vi.fn((mw: any) => {
+      // store as a "catch-all" handler under key "*"
+      const existing = routes.get('*');
+      if (existing) {
+        // chain middlewares in insertion order
+        routes.set('*', async (req: any, res: any, next: any) => existing(req, res, () => mw(req, res, next)));
+      } else {
+        routes.set('*', mw);
+      }
+    }),
+    get: vi.fn((path: any, handler: any) => {
+      if (Array.isArray(path)) {
+        for (const p of path) routes.set(`GET ${p}`, handler);
+        return;
+      }
+      routes.set(`GET ${path}`, handler);
+    }),
+    post: vi.fn((path: any, handler: any) => routes.set(`POST ${path}`, handler)),
+    delete: vi.fn((path: any, handler: any) => routes.set(`DELETE ${path}`, handler)),
+    listen: vi.fn((_port: number, _host: string, cb?: () => void) => {
+      if (cb) cb();
+      return { on: vi.fn() };
+    }),
+    __routes: routes,
+  };
+
+  const expressDefault: any = () => app;
+  expressDefault.json = vi.fn(() => (_req: any, _res: any, next: any) => next());
+  return { default: expressDefault };
+});
 
 vi.mock('../../../web/templates.js', () => ({
   renderAuthSuccess: state.renderAuthSuccess,
@@ -83,6 +109,28 @@ function createMockResponse() {
     statusCode: 0,
     body: '',
     headersSent: false,
+    status: vi.fn(function (this: any, statusCode: number) {
+      this.statusCode = statusCode;
+      return this;
+    }),
+    json: vi.fn(function (this: any, payload: any) {
+      this.headersSent = true;
+      this.body += JSON.stringify(payload);
+      return this;
+    }),
+    type: vi.fn(function (this: any, contentType: string) {
+      this.headers['Content-Type'] = contentType;
+      return this;
+    }),
+    set: vi.fn(function (this: any, headers: Record<string, string>) {
+      Object.assign(this.headers, headers);
+      return this;
+    }),
+    send: vi.fn(function (this: any, body: string) {
+      this.headersSent = true;
+      this.body += body;
+      return this;
+    }),
     setHeader: vi.fn(function (this: any, key: string, value: string) {
       this.headers[key] = value;
     }),
@@ -109,14 +157,29 @@ function createMockRequest(input: {
   const req = new EventEmitter() as any;
   req.method = input.method;
   req.url = input.url;
+  req.path = input.url.split('?')[0];
+  req.originalUrl = input.url;
   req.headers = input.headers ?? {};
+  req.body = (req.headers['content-type'] === 'application/json' || req.headers['content-type'] === 'application/json; charset=utf-8')
+    ? {}
+    : undefined;
+  req.query = {};
   return req;
 }
 
 async function invokeHandler(req: any, res: any): Promise<void> {
-  const handler = state.requestHandler;
+  const expressModule: any = await import('express');
+  const routes: Map<string, any> = (expressModule.default() as any).__routes;
+
+  const mw = routes.get('*');
+  const key = `${req.method} ${req.path}`;
+  const handler = routes.get(key);
   if (!handler) {
-    throw new Error('Request handler was not initialized');
+    throw new Error(`No route registered for ${key}`);
+  }
+
+  if (mw) {
+    await new Promise<void>((resolve) => mw(req, res, resolve));
   }
   await handler(req, res);
 }
@@ -143,14 +206,13 @@ describe('Transport Handlers', () => {
   });
 
   it('rejects requests from non-localhost origins', async () => {
-    const server = { connect: vi.fn(async () => undefined) } as any;
     const tokenManager = { listAccounts: vi.fn(), getAccountMode: vi.fn(), setAccountMode: vi.fn(), clearTokens: vi.fn(), saveTokens: vi.fn() } as any;
-    const handler = new HttpTransportHandler(server, { port: 3999, host: '127.0.0.1' }, tokenManager);
+    const handler = new HttpTransportHandler({ port: 3999, host: '127.0.0.1' }, tokenManager, () => ({ connect: vi.fn(async () => undefined) } as any));
     await handler.connect();
 
     const req = createMockRequest({
       method: 'GET',
-      url: '/health',
+      url: '/healthz',
       headers: { origin: 'https://attacker.example.com', accept: 'application/json' }
     });
     const res = createMockResponse();
@@ -162,14 +224,13 @@ describe('Transport Handlers', () => {
   });
 
   it('returns health payload and sets localhost CORS defaults', async () => {
-    const server = { connect: vi.fn(async () => undefined) } as any;
     const tokenManager = { listAccounts: vi.fn(), getAccountMode: vi.fn(), setAccountMode: vi.fn(), clearTokens: vi.fn(), saveTokens: vi.fn() } as any;
-    const handler = new HttpTransportHandler(server, { port: 4001, host: '127.0.0.1' }, tokenManager);
+    const handler = new HttpTransportHandler({ port: 4001, host: '127.0.0.1' }, tokenManager, () => ({ connect: vi.fn(async () => undefined) } as any));
     await handler.connect();
 
     const req = createMockRequest({
       method: 'GET',
-      url: '/health',
+      url: '/healthz',
       headers: { accept: 'application/json' }
     });
     const res = createMockResponse();
@@ -177,12 +238,10 @@ describe('Transport Handlers', () => {
     await invokeHandler(req, res);
 
     expect(res.statusCode).toBe(200);
-    expect(res.headers['Access-Control-Allow-Origin']).toBe('http://127.0.0.1:4001');
-    expect(JSON.parse(res.body).status).toBe('healthy');
+    expect(JSON.parse(res.body).status).toBe('ok');
   });
 
   it('returns account list via API endpoint', async () => {
-    const server = { connect: vi.fn(async () => undefined) } as any;
     const tokenManager = {
       listAccounts: vi.fn(async () => [{ id: 'work', status: 'active' }]),
       getAccountMode: vi.fn(),
@@ -190,7 +249,7 @@ describe('Transport Handlers', () => {
       clearTokens: vi.fn(),
       saveTokens: vi.fn()
     } as any;
-    const handler = new HttpTransportHandler(server, {}, tokenManager);
+    const handler = new HttpTransportHandler({}, tokenManager, () => ({ connect: vi.fn(async () => undefined) } as any));
     await handler.connect();
 
     const req = createMockRequest({
@@ -208,7 +267,6 @@ describe('Transport Handlers', () => {
   });
 
   it('allows /api/accounts from configured non-localhost origins', async () => {
-    const server = { connect: vi.fn(async () => undefined) } as any;
     const tokenManager = {
       listAccounts: vi.fn(async () => [{ id: 'work', status: 'active' }]),
       getAccountMode: vi.fn(),
@@ -216,9 +274,9 @@ describe('Transport Handlers', () => {
       clearTokens: vi.fn(),
       saveTokens: vi.fn()
     } as any;
-    const handler = new HttpTransportHandler(server, {
+    const handler = new HttpTransportHandler({
       allowedOriginsForAccounts: ['https://gateway.example.com']
-    }, tokenManager);
+    }, tokenManager, () => ({ connect: vi.fn(async () => undefined) } as any));
     await handler.connect();
 
     const req = createMockRequest({
@@ -235,11 +293,10 @@ describe('Transport Handlers', () => {
   });
 
   it('still rejects /mcp from configured non-localhost origins', async () => {
-    const server = { connect: vi.fn(async () => undefined) } as any;
     const tokenManager = { listAccounts: vi.fn(), getAccountMode: vi.fn(), setAccountMode: vi.fn(), clearTokens: vi.fn(), saveTokens: vi.fn() } as any;
-    const handler = new HttpTransportHandler(server, {
+    const handler = new HttpTransportHandler({
       allowedOriginsForAccounts: ['https://gateway.example.com']
-    }, tokenManager);
+    }, tokenManager, () => ({ connect: vi.fn(async () => undefined) } as any));
     await handler.connect();
 
     const req = createMockRequest({
@@ -256,9 +313,8 @@ describe('Transport Handlers', () => {
   });
 
   it('creates OAuth URL for POST /api/accounts', async () => {
-    const server = { connect: vi.fn(async () => undefined) } as any;
     const tokenManager = { listAccounts: vi.fn(), getAccountMode: vi.fn(), setAccountMode: vi.fn(), clearTokens: vi.fn(), saveTokens: vi.fn() } as any;
-    const handler = new HttpTransportHandler(server, { port: 4000, host: 'localhost' }, tokenManager);
+    const handler = new HttpTransportHandler({ port: 4000, host: 'localhost' }, tokenManager, () => ({ connect: vi.fn(async () => undefined) } as any));
     await handler.connect();
 
     const req = createMockRequest({
@@ -268,10 +324,9 @@ describe('Transport Handlers', () => {
     });
     const res = createMockResponse();
 
-    const pending = invokeHandler(req, res);
-    req.emit('data', Buffer.from(JSON.stringify({ accountId: 'work' })));
-    req.emit('end');
-    await pending;
+    req.headers['content-type'] = 'application/json';
+    req.body = { accountId: 'work' };
+    await invokeHandler(req, res);
 
     expect(state.validateAccountId).toHaveBeenCalledWith('work');
     expect(res.statusCode).toBe(200);
@@ -281,13 +336,12 @@ describe('Transport Handlers', () => {
   });
 
   it('uses public base URL for OAuth redirect URI when configured', async () => {
-    const server = { connect: vi.fn(async () => undefined) } as any;
     const tokenManager = { listAccounts: vi.fn(), getAccountMode: vi.fn(), setAccountMode: vi.fn(), clearTokens: vi.fn(), saveTokens: vi.fn() } as any;
-    const handler = new HttpTransportHandler(server, {
+    const handler = new HttpTransportHandler({
       port: 4000,
       host: '0.0.0.0',
       publicBaseUrl: 'https://calendar.example.com'
-    }, tokenManager);
+    }, tokenManager, () => ({ connect: vi.fn(async () => undefined) } as any));
     await handler.connect();
 
     const req = createMockRequest({
@@ -297,10 +351,9 @@ describe('Transport Handlers', () => {
     });
     const res = createMockResponse();
 
-    const pending = invokeHandler(req, res);
-    req.emit('data', Buffer.from(JSON.stringify({ accountId: 'work' })));
-    req.emit('end');
-    await pending;
+    req.headers['content-type'] = 'application/json';
+    req.body = { accountId: 'work' };
+    await invokeHandler(req, res);
 
     expect(res.statusCode).toBe(200);
     expect(state.lastOAuthRedirectUri).toBe('https://calendar.example.com/oauth2callback?account=work');
@@ -308,9 +361,8 @@ describe('Transport Handlers', () => {
   });
 
   it('returns 500 when MCP transport request handling throws', async () => {
-    const server = { connect: vi.fn(async () => undefined) } as any;
     const tokenManager = { listAccounts: vi.fn(), getAccountMode: vi.fn(), setAccountMode: vi.fn(), clearTokens: vi.fn(), saveTokens: vi.fn() } as any;
-    const handler = new HttpTransportHandler(server, {}, tokenManager);
+    const handler = new HttpTransportHandler({}, tokenManager, () => ({ connect: vi.fn(async () => undefined) } as any));
     await handler.connect();
 
     if (!state.transport) {

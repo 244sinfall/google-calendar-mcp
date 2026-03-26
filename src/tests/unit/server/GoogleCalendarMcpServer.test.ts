@@ -157,8 +157,14 @@ describe('GoogleCalendarMcpServer', () => {
 
     expect(state.httpConnect).toHaveBeenCalledTimes(1);
     const args = (state.httpConnect as any).mockHttpArgs;
-    expect(args[1]).toEqual({ host: '0.0.0.0', port: 3456, debug: false });
-    expect(args[2]).toBe(state.tokenManagerInstance);
+    expect(args[0]).toMatchObject({
+      host: '0.0.0.0',
+      port: 3456,
+      debug: false,
+      enableDnsRebindingProtection: false,
+    });
+    expect(args[1]).toBe(state.tokenManagerInstance);
+    expect(typeof args[2]).toBe('function');
   });
 
   it('throws for unsupported transport types', async () => {

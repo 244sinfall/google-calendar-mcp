@@ -2,6 +2,7 @@ export interface TransportConfig {
   type: 'stdio' | 'http';
   port?: number;
   host?: string;
+  path?: string;
 }
 
 export interface ServerConfig {
@@ -10,6 +11,9 @@ export interface ServerConfig {
   enabledTools?: string[];
   allowedOriginsForAccounts?: string[];
   publicBaseUrl?: string;
+  enableDnsRebindingProtection?: boolean;
+  allowedHosts?: string[];
+  allowedOrigins?: string[];
 }
 
 function parseEnabledTools(value: string | undefined, source: string): string[] | undefined {
@@ -36,16 +40,36 @@ export function parseArgs(args: string[]): ServerConfig {
   const publicBaseUrlRaw = process.env.GOOGLE_CALENDAR_MCP_PUBLIC_BASE_URL?.trim();
   const publicBaseUrl = publicBaseUrlRaw && publicBaseUrlRaw.length > 0 ? publicBaseUrlRaw : undefined;
 
+  const mcpPathRaw = process.env.GOOGLE_CALENDAR_MCP_PATH?.trim();
+  const mcpPath = mcpPathRaw && mcpPathRaw.length > 0 ? mcpPathRaw : undefined;
+
+  const enableDnsRebindingProtection =
+    (process.env.GOOGLE_CALENDAR_MCP_ENABLE_DNS_REBINDING_PROTECTION || '').toLowerCase() === 'true';
+
+  const allowedHosts = (process.env.GOOGLE_CALENDAR_MCP_ALLOWED_HOSTS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+  const allowedOrigins = (process.env.GOOGLE_CALENDAR_MCP_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
   const config: ServerConfig = {
     transport: {
       type: (process.env.TRANSPORT as 'stdio' | 'http') || 'stdio',
       port: process.env.PORT ? parseInt(process.env.PORT, 10) : 3000,
-      host: process.env.HOST || '127.0.0.1'
+      host: process.env.HOST || '127.0.0.1',
+      path: mcpPath
     },
     debug: process.env.DEBUG === 'true' || false,
     enabledTools: parseEnabledTools(process.env.ENABLED_TOOLS, 'ENABLED_TOOLS'),
     allowedOriginsForAccounts: allowedOriginsForAccounts.length > 0 ? allowedOriginsForAccounts : undefined,
-    publicBaseUrl
+    publicBaseUrl,
+    enableDnsRebindingProtection,
+    allowedHosts: allowedHosts.length > 0 ? allowedHosts : undefined,
+    allowedOrigins: allowedOrigins.length > 0 ? allowedOrigins : undefined
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -63,6 +87,9 @@ export function parseArgs(args: string[]): ServerConfig {
         break;
       case '--host':
         config.transport.host = args[++i];
+        break;
+      case '--path':
+        config.transport.path = args[++i];
         break;
       case '--debug':
         config.debug = true;

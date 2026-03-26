@@ -44,6 +44,52 @@ export class GoogleCalendarMcpServer {
     });
   }
 
+  /**
+   * Create a fresh MCP server instance.
+   * Used by Streamable HTTP mode to create one server per session.
+   */
+  private createSessionServer(): McpServer {
+    const sessionServer = new McpServer({
+      name: "google-calendar",
+      version: SERVER_VERSION
+    });
+
+    // Tools: same registration logic, but bound to this instance for auth.
+    ToolRegistry.registerAll(sessionServer, this.executeWithHandler.bind(this), this.config);
+
+    // Manage accounts tool needs server internals; reuse same context (tokens/auth are shared).
+    const self = this;
+    const serverContext: ServerContext = {
+      oauth2Client: this.oauth2Client,
+      tokenManager: this.tokenManager,
+      authServer: this.authServer,
+      get accounts() { return self.accounts; },
+      reloadAccounts: async () => {
+        this.accounts = await this.tokenManager.loadAllAccounts();
+        return this.accounts;
+      }
+    };
+
+    const manageAccountsHandler = new ManageAccountsHandler();
+    sessionServer.tool(
+      'manage-accounts',
+      "Manage Google account authentication. Actions: 'list' (show accounts), 'add' (authenticate new account), 'remove' (remove account).",
+      {
+        action: z.enum(['list', 'add', 'remove'])
+          .describe("Action to perform: 'list' shows all accounts, 'add' authenticates a new account, 'remove' removes an account"),
+        account_id: z.string()
+          .regex(/^[a-z0-9_-]{1,64}$/, "Account nickname must be 1-64 characters: lowercase letters, numbers, dashes, underscores only")
+          .optional()
+          .describe("Account nickname (e.g., 'work', 'personal') - a friendly name to identify this Google account. Required for 'add' and 'remove'. Optional for 'list' (shows all if omitted)")
+      },
+      async (args) => {
+        return manageAccountsHandler.runTool(args, serverContext);
+      }
+    );
+
+    return sessionServer;
+  }
+
   async initialize(): Promise<void> {
     // 1. Initialize Authentication (but don't block on it)
     this.oauth2Client = await initializeOAuth2Client();
@@ -213,15 +259,15 @@ export class GoogleCalendarMcpServer {
         const httpConfig: HttpTransportConfig = {
           port: this.config.transport.port,
           host: this.config.transport.host,
+          path: this.config.transport.path,
           debug: this.config.debug === true,
           allowedOriginsForAccounts: this.config.allowedOriginsForAccounts,
-          publicBaseUrl: this.config.publicBaseUrl
+          publicBaseUrl: this.config.publicBaseUrl,
+          enableDnsRebindingProtection: this.config.enableDnsRebindingProtection === true,
+          allowedHosts: this.config.allowedHosts,
+          allowedOrigins: this.config.allowedOrigins
         };
-        const httpHandler = new HttpTransportHandler(
-          this.server,
-          httpConfig,
-          this.tokenManager
-        );
+        const httpHandler = new HttpTransportHandler(httpConfig, this.tokenManager, this.createSessionServer.bind(this));
         await httpHandler.connect();
         break;
         
