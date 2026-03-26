@@ -587,8 +587,12 @@ export class HttpTransportHandler {
         resolve();
       });
       // Important for test runners: don't keep the process alive due to open server handles.
-      // In production, this has no negative effect (server still accepts connections).
-      if (typeof (httpServer as any).unref === 'function') {
+      // In real deployments, DO NOT unref, or the process may exit immediately.
+      const isTestEnv =
+        process.env.NODE_ENV === 'test' ||
+        process.env.VITEST === 'true' ||
+        process.env.VITEST_WORKER_ID !== undefined;
+      if (isTestEnv && typeof (httpServer as any).unref === 'function') {
         (httpServer as any).unref();
       }
       httpServer.on("error", reject);
